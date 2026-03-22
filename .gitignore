@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets
+.env
+roostooAPI.txt
+
+# Logs and runtime artifacts
+logs/
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Data artifacts (keep folder structure only)
+data/raw/
+!data/README.md
