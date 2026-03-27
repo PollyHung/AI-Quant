@@ -13,9 +13,10 @@ Production-ready starter bot for the Roostoo Quant Trading Hackathon.
 - `main.py`: autonomous loop orchestration
 - `config.py`: env loading and validation
 - `api_client.py`: signed API requests + retries/backoff + throttling
-- `strategy.py`: MA crossover + momentum signal generation
+- `strategy.py`: selectable strategy modes (`ma_momentum` or `dip_ladder`)
 - `risk.py`: risk and exchange rule checks
 - `execution.py`: safe execution, DRY_RUN, duplicate/pending guards
+- `adaptive.py`: live PnL tracking + auto-tuning for strategy/risk aggressiveness
 - `logger.py`: console + file logging (`logs/bot.log`)
 - `utils.py`: shared utility helpers
 - `.env.example`: safe config template
@@ -25,10 +26,18 @@ Production-ready starter bot for the Roostoo Quant Trading Hackathon.
 ## Strategy
 
 - Build rolling price history from `GET /v3/ticker` polling.
-- `BUY` when short MA crosses above long MA and momentum is positive.
-- `SELL` when short MA crosses below long MA.
-- Forced `SELL` when stop-loss or take-profit is hit.
-- Otherwise `HOLD`.
+- `STRATEGY_MODE=ma_momentum`:
+  - `BUY` on bullish MA crossover with positive momentum.
+  - Bearish cross is treated as hold unless exit model is triggered.
+- `STRATEGY_MODE=dip_ladder`:
+  - Enter first tranche after pullback + small rebound confirmation.
+  - Add more tranches only if price dips below last buy by `DIP_STEP_PCT`.
+  - Keep holding until exit model triggers.
+- Exit model for both modes:
+  - Hard stop-loss.
+  - Take-profit is armed, then trailing-stop exit.
+  - Optional minimum hold time (`MIN_HOLD_SECONDS`) to avoid flip-selling.
+- Adaptive tuner monitors portfolio/trade outcomes and adjusts aggressiveness.
 
 ## Risk controls
 
@@ -69,6 +78,7 @@ Signed requests:
 - Retries with exponential backoff and timeout handling
 - Malformed JSON handling
 - Structured logs for market fetches, signals, orders, API failures, portfolio snapshots
+- Trade outcome logs (`win`/`loss`) and adaptive reconfiguration logs
 
 ## Setup
 

@@ -86,7 +86,9 @@ class ExecutionEngine:
             return ExecutionResult(True, False, action, "duplicate_order_prevented", quantity=qty)
 
         pending = self.client.get_pending_count()
-        pending_count = int(pending.get("count", pending.get("pending_count", 0)))
+        pending_count = int(
+            pending.get("TotalPending", pending.get("count", pending.get("pending_count", pending.get("Data", 0))))
+        )
         if pending_count > 0:
             return ExecutionResult(True, False, action, "pending_order_exists", quantity=qty, response=pending)
 
@@ -110,11 +112,21 @@ class ExecutionEngine:
         if order_id:
             position.last_trade_ts = datetime.now(tz=timezone.utc).timestamp()
             if action == "BUY":
-                position.quantity += qty
-                position.avg_entry_price = last_price
+                prev_qty = position.quantity
+                prev_cost = prev_qty * position.avg_entry_price
+                new_cost = qty * last_price
+                position.quantity = prev_qty + qty
+                if position.quantity > 0:
+                    position.avg_entry_price = (prev_cost + new_cost) / position.quantity
+                position.peak_price_since_entry = max(position.peak_price_since_entry, last_price)
+                position.tranche_count = (position.tranche_count + 1) if prev_qty > 0 else 1
+                position.last_buy_price = last_price
             elif action == "SELL":
                 position.quantity = max(0.0, position.quantity - qty)
                 if position.quantity == 0:
                     position.avg_entry_price = 0.0
+                    position.peak_price_since_entry = 0.0
+                    position.tranche_count = 0
+                    position.last_buy_price = 0.0
 
         return ExecutionResult(True, True, action, "order_submitted", quantity=qty, order_id=order_id, response=response)

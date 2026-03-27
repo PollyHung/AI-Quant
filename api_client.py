@@ -8,7 +8,6 @@ import json
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 from requests import Response
@@ -42,7 +41,8 @@ class RoostooClient:
 
     def _sorted_param_string(self, params: dict[str, Any]) -> str:
         cleaned = {k: v for k, v in params.items() if v is not None}
-        return urlencode(sorted(cleaned.items()), doseq=True)
+        # Roostoo expects signing over the raw sorted key-value string.
+        return "&".join(f"{k}={v}" for k, v in sorted(cleaned.items()))
 
     def _sign(self, param_str: str) -> str:
         signature = hmac.new(self.api_secret, param_str.encode("utf-8"), hashlib.sha256)
@@ -72,13 +72,13 @@ class RoostooClient:
         params = dict(params or {})
         headers: dict[str, str] = {}
 
+        param_str = self._sorted_param_string(params)
+
         if signed:
             params["timestamp"] = now_ms()
             param_str = self._sorted_param_string(params)
             headers["RST-API-KEY"] = self.api_key
             headers["MSG-SIGNATURE"] = self._sign(param_str)
-        else:
-            param_str = self._sorted_param_string(params)
 
         if method == "POST":
             headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -92,7 +92,8 @@ class RoostooClient:
                 if method == "GET":
                     response = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
                 elif method == "POST":
-                    response = self.session.post(url, data=params, headers=headers, timeout=self.timeout)
+                    # Use raw form-encoded body to keep signed payload and submitted body identical.
+                    response = self.session.post(url, data=param_str, headers=headers, timeout=self.timeout)
                 else:
                     raise APIError(f"Unsupported method: {method}")
 
@@ -129,7 +130,12 @@ class RoostooClient:
 
     def get_ticker(self, pair: str | None = None) -> dict[str, Any]:
         params = {"pair": pair} if pair else {}
-        return self._request("GET", "/v3/ticker", params=params)
+        try:
+            return self._request("GET", "/v3/ticker", params=params)
+        except APIError as exc:
+            if "Missed Key: timestamp" in str(exc):
+                return self._request("GET", "/v3/ticker", params=params, signed=True)
+            raise
 
     def get_balance(self) -> dict[str, Any]:
         return self._request("GET", "/v3/balance", signed=True)
@@ -141,7 +147,7 @@ class RoostooClient:
         params = {
             "pair": pair,
             "side": side.upper(),
-            "order_type": order_type.upper(),
+            "type": order_type.upper(),
             "quantity": quantity,
         }
         return self._request("POST", "/v3/place_order", params=params, signed=True)
@@ -152,11 +158,11 @@ class RoostooClient:
         pair: str | None = None,
         pending_only: bool | None = None,
     ) -> dict[str, Any]:
-        params = {
-            "order_id": order_id,
-            "pair": pair,
-            "pending_only": int(bool(pending_only)) if pending_only is not None else None,
-        }
+        # This Roostoo environment allows only one of order_id or pair.
+        query_pair = None if order_id else pair
+        params = {"order_id": order_id, "pair": query_pair}
+        if order_id is None and query_pair is None and pending_only is not None:
+            params["pending_only"] = int(bool(pending_only))
         return self._request("POST", "/v3/query_order", params=params, signed=True)
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:

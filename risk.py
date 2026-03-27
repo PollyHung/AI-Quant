@@ -23,6 +23,9 @@ class PositionState:
     quantity: float = 0.0
     avg_entry_price: float = 0.0
     last_trade_ts: float = 0.0
+    peak_price_since_entry: float = 0.0
+    tranche_count: int = 0
+    last_buy_price: float = 0.0
 
     @property
     def has_position(self) -> bool:
@@ -43,18 +46,37 @@ class RiskManager:
         min_cash_reserve_usd: float,
         stop_loss_pct: float,
         take_profit_pct: float,
+        trailing_stop_pct: float,
+        min_hold_seconds: int,
         cooldown_seconds: int,
     ) -> None:
         self.max_position_usd = max_position_usd
         self.min_cash_reserve_usd = min_cash_reserve_usd
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.trailing_stop_pct = trailing_stop_pct
+        self.min_hold_seconds = min_hold_seconds
         self.cooldown_seconds = cooldown_seconds
 
     @staticmethod
     def parse_pair_constraints(exchange_info: dict[str, Any], target_pair: str) -> PairConstraints:
         pair_upper = target_pair.upper()
         candidates: list[dict[str, Any]] = []
+        trade_pairs = exchange_info.get("TradePairs")
+        if isinstance(trade_pairs, dict):
+            for pair_name, meta in trade_pairs.items():
+                if str(pair_name).upper() != pair_upper or not isinstance(meta, dict):
+                    continue
+                min_order = safe_float(meta.get("MiniOrder", 0.0), 0.0)
+                amount_precision = int(meta.get("AmountPrecision", 6))
+                tradable = bool(meta.get("CanTrade", True))
+                return PairConstraints(
+                    pair=str(pair_name),
+                    min_order=min_order,
+                    amount_precision=amount_precision,
+                    tradable=tradable,
+                    found=True,
+                )
 
         symbols = exchange_info.get("symbols")
         if isinstance(symbols, list):
@@ -96,11 +118,19 @@ class RiskManager:
         if not position.has_position or position.avg_entry_price <= 0:
             return False, "no_open_position"
 
+        position.peak_price_since_entry = max(position.peak_price_since_entry, current_price)
+
         if current_price <= position.avg_entry_price * (1 - self.stop_loss_pct):
             return True, "stop_loss_hit"
 
-        if current_price >= position.avg_entry_price * (1 + self.take_profit_pct):
-            return True, "take_profit_hit"
+        now = datetime.now(tz=timezone.utc).timestamp()
+        held_seconds = now - position.last_trade_ts if position.last_trade_ts > 0 else 0
+        if held_seconds < self.min_hold_seconds:
+            return False, "min_hold_active"
+
+        take_profit_armed = position.peak_price_since_entry >= position.avg_entry_price * (1 + self.take_profit_pct)
+        if take_profit_armed and current_price <= position.peak_price_since_entry * (1 - self.trailing_stop_pct):
+            return True, "trailing_take_profit_exit"
 
         return False, "risk_not_triggered"
 
