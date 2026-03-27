@@ -48,4 +48,9 @@ def extract_order_id(resp: dict[str, Any]) -> str:
     for key in ("orderId", "order_id", "id"):
         if key in resp:
             return str(resp[key])
+    order_detail = resp.get("OrderDetail")
+    if isinstance(order_detail, dict):
+        for key in ("OrderID", "orderId", "order_id", "id"):
+            if key in order_detail:
+                return str(order_detail[key])
     return ""
